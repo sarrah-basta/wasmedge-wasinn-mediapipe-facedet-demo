@@ -23,7 +23,6 @@ fastrand = "1.8.0"
 > Note: After the `TENSORFLOWLITE` encoding added into the wasi-nn crate, we'll update this example to use the newer version.
 
 ## Build
-> Note : Currently the output WASM file is directly provided for testing instead of source code. Hence, steps from run can directly be followed
 
 Compile the source code to WebAssembly:
 
@@ -31,11 +30,11 @@ Compile the source code to WebAssembly:
 cargo build --target=wasm32-wasi --release
 ```
 
-The output WASM file will be at [`target/wasm32-wasi/release/wasmedge-wasinn-example-tflite-mediapipe-face-detection`](wasmedge-wasinn-example-tflite-bird-image.wasm).
+The output WASM file will be at [`target/wasm32-wasi/release/wasmedge-wasinn-example-tflite-mediapipe-face-detection`](target/wasm32-wasi/release/wasmedge-wasinn-example-tflite-mediapipe-face-detection.wasm).
 To speed up the image processing, we can enable the AOT mode in WasmEdge with:
 
 ```bash
-wasmedgec rust/tflite-bird/target/wasm32-wasi/release/wasmedge-wasinn-example-tflite-bird-image.wasm out.wasm
+wasmedgec target/wasm32-wasi/release/wasmedge-wasinn-example-tflite-mediapipe-face-detection.wasm out.wasm
 ```
 
 ## Run
