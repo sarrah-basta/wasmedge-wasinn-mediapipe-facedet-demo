@@ -1,11 +1,21 @@
 use image::io::Reader;
-use image::DynamicImage;
-use image::GenericImageView;
+use image::{Rgb, RgbImage, DynamicImage, GenericImageView};
 use std::convert::TryInto;
 use std::env;
 use std::fs;
 use fastrand;
+use std::path::Path;
 use wasi_nn;
+use lazy_static::lazy_static;
+
+// use crate::{
+//     draw_box::{draw_bboxes_on_image},
+// };
+
+use imageproc::{
+    drawing::{draw_hollow_rect_mut, draw_text},
+    rect::Rect,
+};
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_entry()?;
@@ -125,6 +135,8 @@ fn infer_image()-> Result<Vec<f32>, Box<dyn std::error::Error>> {
         facial_key.push(x_keypoint);
         facial_key.push(y_keypoint);
     }
+
+    
     println!("\n The pixel co-ordinates of the facial keypoints are : \n");
     println!("Left eye : {:?} , {:?} ", facial_key[4], facial_key[5]);
     println!("Right eye : {:?} , {:?}", facial_key[6], facial_key[7]);
@@ -133,10 +145,8 @@ fn infer_image()-> Result<Vec<f32>, Box<dyn std::error::Error>> {
     println!("Left eye tragion : {:?} , {:?} ", facial_key[12], facial_key[13]);
     println!("Right eye tragion : {:?} , {:?} ", facial_key[14], facial_key[15]);
 
-    println!("\n Writing output Vector facial_key to file output_facial_key.bin ");
-    let output_facial_key: Vec<u8> = facial_key.iter().flat_map(|val| val.to_be_bytes()).collect();  
-    std::fs::write("output_facial_key.bin", output_facial_key).unwrap(); 
-    
+    println!("\n The output image is saved in the same place as {:?}", &image_name);
+    let ans_image = draw_bboxes_on_image(inp_img,facial_key, prob_value, image_name);
     
    Ok(output_buffer)
 }
@@ -326,6 +336,49 @@ fn image_to_tensor(path: String, height: u32, width: u32) -> Vec<u8> {
     // println!("{:?}", u8_f32_arr); 
     return u8_f32_arr;
   }
+
+lazy_static! {
+    static ref DEJAVU_MONO: rusttype::Font<'static> = {
+        let font_data: &[u8] = include_bytes!("../resources/DejaVuSansMono.ttf");
+        let font: rusttype::Font<'static> =
+            rusttype::Font::try_from_bytes(font_data).expect("Load font");
+        font
+    };
+}
+
+fn draw_bboxes_on_image(
+    mut frame: DynamicImage,
+    facial_key_coords : Vec<u32>, // later give box along with its confidence
+    confidence : f32,
+    image_name: &str,
+) -> RgbImage{ 
+    // let (image_height, image_width) = (frame.height() as f32, frame.width() as f32);
+    let mut frame_rgb: RgbImage = frame.to_rgb8();
+    let blue  = Rgb([0u8,   0u8,   255u8]);
+
+    let (x1, y1) = (facial_key_coords[0], facial_key_coords[1]);
+    let (x2, y2) = (facial_key_coords[2], facial_key_coords[3]);
+    let rect_width = x2 - x1;
+    let rect_height = y2 - y1;
+
+    let face_rect =
+                Rect::at(x1 as i32, y1 as i32).of_size(rect_width as u32, rect_height as u32);
+    draw_hollow_rect_mut(&mut frame_rgb, face_rect, blue);
+    frame_rgb = draw_text(
+                    &frame_rgb,
+                    blue,
+                    x1 as i32,
+                    y1 as i32,
+                    rusttype::Scale { x: 16.0, y: 16.0 },
+                    &DEJAVU_MONO,
+                    &format!("{:.2}%", confidence * 100.0),
+                );
+    // draw_hollow_rect_mut(&mut image_dr, Rect::at(60, 10).of_size(20, 20), blue);
+    let out_name = format!("{}{}",image_name,"_drawn_out.jpg");
+    let path = Path::new(&out_name);
+    frame_rgb.save(path).unwrap();
+    return frame_rgb;
+}
 
 // A wrapper for class ID and match probabilities.
 #[derive(Debug, PartialEq)]

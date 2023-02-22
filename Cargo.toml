@@ -7,9 +7,12 @@ edition = "2018"
 publish = false
 
 [dependencies]
-image = { version = "0.23.14", default-features = false, features = ["gif", "jpeg", "ico", "png", "pnm", "tga", "tiff", "webp", "bmp", "hdr", "dxt", "dds", "farbfeld"]  }
+image = { version = "0.24.1", default-features = false, features = ["gif", "jpeg", "ico", "png", "pnm", "tga", "tiff", "webp", "bmp", "hdr", "dxt", "dds", "farbfeld"]  }
 wasi-nn = { version = "0.1.0" }
 fastrand = { version = "1.8.0" }
+imageproc = "0.23.0"
+lazy_static = "1.4.0"
+rusttype = "0.9.3"
 
 # This crate is built with the wasm32-wasi target, so it's separate
 # from the main Wasmtime build, so use this directive to exclude it
