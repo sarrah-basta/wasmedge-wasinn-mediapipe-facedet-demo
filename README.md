@@ -62,7 +62,7 @@ Execute the WASM with the `wasmedge` with Tensorflow Lite supporting:
 wasmedge --dir .:. out.wasm face_detection_short_range.tflite /path/to/image_file.jpg/
 ```
 
-This selects a *random* box from among the detections (filtered using confidence score threshold) and gives the output
+This selects all the *DISTINCT FACES* in the image (filtered using confidence score threshold and `Non-Maximum Suppression` to avoid overlap) and gives the output
 
 ```bash
 wasmedge --dir .:. out.wasm face_detection_short_range.tflite images/test_image.jpg 
@@ -74,19 +74,80 @@ Created wasi-nn execution context with ID: 0
 Read input tensor, size in bytes: 196608
 Executed graph inference
 
- The pixel co-ordinates for the bounding box of the detected face with probability 0.81526 are : 
+The number of distinct faces detected (AFTER NMS) are : 6 
 
-(x1, y1) : 359 , 277
-(x2, y2) : 518 , 408
 
- The pixel co-ordinates of the facial keypoints are : 
+The pixel co-ordinates for the bounding box of the detected faces with probability 0.92712575 are : 
 
-Left eye : 399 , 312 
-Right eye : 459 , 315
-Nose Tip : 418 , 344 
+(x1, y1) : 125 , 405
+(x2, y2) : 281 , 534
+The pixel co-ordinates of the facial keypoints are :
+Left eye : 157 , 443 
+Right eye : 215 , 443
+Nose Tip : 172 , 474 
+Mouth : 178 , 498 
+Left eye tragion : 146 , 451 
+Right eye tragion : 276 , 452 
+
+The pixel co-ordinates for the bounding box of the detected faces with probability 0.9111204 are : 
+
+(x1, y1) : 71 , 147
+(x2, y2) : 228 , 277
+The pixel co-ordinates of the facial keypoints are :
+Left eye : 104 , 185 
+Right eye : 165 , 191
+Nose Tip : 121 , 223 
+Mouth : 124 , 245 
+Left eye tragion : 88 , 186 
+Right eye tragion : 220 , 196 
+
+The pixel co-ordinates for the bounding box of the detected faces with probability 0.90582424 are : 
+
+(x1, y1) : 276 , 66
+(x2, y2) : 448 , 209
+The pixel co-ordinates of the facial keypoints are :
+Left eye : 310 , 109 
+Right eye : 366 , 113
+Nose Tip : 314 , 149 
+Mouth : 323 , 174 
+Left eye tragion : 310 , 109 
+Right eye tragion : 441 , 118 
+
+The pixel co-ordinates for the bounding box of the detected faces with probability 0.89355844 are : 
+
+(x1, y1) : 539 , 99
+(x2, y2) : 737 , 263
+The pixel co-ordinates of the facial keypoints are :
+Left eye : 636 , 142 
+Right eye : 705 , 151
+Nose Tip : 692 , 186 
+Mouth : 675 , 219 
+Left eye tragion : 545 , 147 
+Right eye tragion : 703 , 160 
+
+The pixel co-ordinates for the bounding box of the detected faces with probability 0.8901366 are : 
+
+(x1, y1) : 589 , 413
+(x2, y2) : 726 , 527
+The pixel co-ordinates of the facial keypoints are :
+Left eye : 640 , 444 
+Right eye : 696 , 450
+Nose Tip : 673 , 473 
+Mouth : 668 , 495 
+Left eye tragion : 594 , 450 
+Right eye tragion : 715 , 458 
+
+The pixel co-ordinates for the bounding box of the detected faces with probability 0.86153024 are : 
+
+(x1, y1) : 358 , 273
+(x2, y2) : 521 , 408
+The pixel co-ordinates of the facial keypoints are :
+Left eye : 398 , 311 
+Right eye : 460 , 314
+Nose Tip : 417 , 344 
 Mouth : 421 , 370 
-Left eye tragion : 377 , 319 
-Right eye tragion : 510 , 327 
+Left eye tragion : 378 , 318 
+Right eye tragion : 513 , 326 
 
  The output image is saved in the same place as "images/test_image.jpg"
 ```

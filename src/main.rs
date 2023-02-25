@@ -1,21 +1,19 @@
 use image::io::Reader;
-use image::{Rgb, RgbImage, DynamicImage, GenericImageView};
+use image::{Rgb, RgbImage, DynamicImage};
 use std::convert::TryInto;
 use std::env;
 use std::fs;
-use fastrand;
 use std::path::Path;
 use wasi_nn;
 use lazy_static::lazy_static;
 
-// use crate::{
-//     draw_box::{draw_bboxes_on_image},
-// };
-
 use imageproc::{
-    drawing::{draw_hollow_rect_mut, draw_text},
+    drawing::{draw_hollow_rect_mut, draw_text, draw_cross_mut},
     rect::Rect,
 };
+
+/// Positive additive constant to avoid divide-by-zero.
+const EPS: f32 = 1.0e-7;
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_entry()?;
@@ -84,14 +82,15 @@ fn infer_image()-> Result<Vec<f32>, Box<dyn std::error::Error>> {
        )
        .unwrap()
    };
-   let mut output0 : Vec<Vec<f32>> = vec![];
-   for i in 0..896{ 
-        let mut ans_i : Vec<f32> = vec![];
-        for j in 0..16 {
-            ans_i.push(output_buffer[i*16 + j]);
-        }
-        output0.push(ans_i);
-    }
+   // Original output0 obtained as anchors
+    let output_0: Vec<f32> = output_buffer
+            .iter()
+            .cloned()
+            .collect();
+    let mut output0: Vec<Vec<f32>> = output_0.chunks(16).map(|x| x.try_into().unwrap()).collect();
+
+   // Bounding box redefined as `[x_top_left, y_top_left, x_bottom_right, y_bottom_right, x_Left eye, y_Left eye, x_Right eye ...]
+    conv_anchors(&mut output0, image_width, image_height);
     let mut output1 = vec![0f32; 896 * 1];
     // println!("output_buffer: {:?}", output_buffer);
     unsafe {
@@ -103,68 +102,53 @@ fn infer_image()-> Result<Vec<f32>, Box<dyn std::error::Error>> {
        )
        .unwrap()
     };
-    let answer = filter_detections(output1);
-    let scores = answer.0;
-    let detection = answer.1;
-    // println!("scores.shape{:?}",scores);
-    
-    let detections = extract_detections(output0, detection, scores);
-    let boxx = detections.0;
-    let keypoints = detections.1 ;
-    let prob_value = detections.2 ;
-    // println!("box : {:?} \n keypoints : {:?} \n\n", boxx, keypoints);
 
-    let mut facial_key : Vec<u32> = vec![];
-    //get pixel co-ordinates for bounding box
-    let x1 = (image_width * boxx[0] ) as u32;
-    let x2 = (image_width * boxx[2] ) as u32;
-    let y1 = (image_height * boxx[1] ) as u32;
-    let y2 = (image_height * boxx[3] ) as u32;
-    println!("\n The pixel co-ordinates for the bounding box of the detected face with probability {:?} are : \n", prob_value);
-    println!("(x1, y1) : {:?} , {:?}", x1, y1);
-    println!("(x2, y2) : {:?} , {:?}", x2, y2);
-
-    facial_key.push(x1);
-    facial_key.push(y1);
-    facial_key.push(x2);
-    facial_key.push(y2);
     
-    for i in 0..6{
-        let x_keypoint = (image_width * keypoints[i][0]) as u32;
-        let y_keypoint = (image_height * keypoints[i][1]) as u32;
-        facial_key.push(x_keypoint);
-        facial_key.push(y_keypoint);
+    // in the tflite model, the scores are not returned as probabilities but as sigmoid scores
+    output1 = output1.iter().map(|x| 1.0/(1.0 + f32::exp(-(x)))).collect();
+    // Fuse bounding boxes with confidence scores (converted to probabilities)
+    // Filter out bounding boxes with a confidence score below the threshold
+    let mut bboxes_with_confidences: Vec<_> = output0
+        .iter()
+        .zip(output1.iter())
+        .filter_map(|(bbox, confidence)| match confidence {
+            x if *x > 0.7 => Some((bbox,confidence)),
+            _ => None,
+        })
+        .collect();
+
+    // Sort pairs of bounding boxes with confidence scores by **ascending** confidences to allow
+    // cheap removal of the top candidates from the back
+    bboxes_with_confidences.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap());
+
+    // println!("\n\nboxes before nms : {:?}\n", bboxes_with_confidences);
+    // Run non-maximum suppression on the sorted vector of bounding boxes with confidences
+    let selected_bboxes = non_maximum_suppression(bboxes_with_confidences, 0.7);
+    // println!("\n\nboxes after nms : {:?}\n", selected_bboxes);
+
+    let mut frame_rgb: RgbImage = inp_img.to_rgb8();
+    let out_name = format!("{}{}",image_name,"_drawn_out.jpg");
+    println!("\nThe number of distinct faces detected (AFTER NMS) are : {:?} \n", selected_bboxes.len());
+    for item in selected_bboxes.iter(){
+        println!("\nThe pixel co-ordinates for the bounding box of the detected faces with probability {:?} are : \n", item.1);
+        println!("(x1, y1) : {:?} , {:?}", item.0[0] as u32, item.0[1] as u32 );
+        println!("(x2, y2) : {:?} , {:?}", item.0[2] as u32, item.0[3] as u32 );
+
+        println!("The pixel co-ordinates of the facial keypoints are :");
+        println!("Left eye : {:?} , {:?} ", item.0[4] as u32, item.0[5] as u32);
+        println!("Right eye : {:?} , {:?}", item.0[6] as u32, item.0[7] as u32);
+        println!("Nose Tip : {:?} , {:?} ", item.0[8] as u32, item.0[9]as u32);
+        println!("Mouth : {:?} , {:?} ", item.0[10] as u32, item.0[11] as u32);
+        println!("Left eye tragion : {:?} , {:?} ", item.0[12] as u32, item.0[13] as u32);
+        println!("Right eye tragion : {:?} , {:?} ",  item.0[14] as u32, item.0[15] as u32);
+        frame_rgb = draw_bboxes_on_image(frame_rgb, item.0.clone() , item.1);
     }
-
-    
-    println!("\n The pixel co-ordinates of the facial keypoints are : \n");
-    println!("Left eye : {:?} , {:?} ", facial_key[4], facial_key[5]);
-    println!("Right eye : {:?} , {:?}", facial_key[6], facial_key[7]);
-    println!("Nose Tip : {:?} , {:?} ", facial_key[8], facial_key[9]);
-    println!("Mouth : {:?} , {:?} ", facial_key[10], facial_key[11]);
-    println!("Left eye tragion : {:?} , {:?} ", facial_key[12], facial_key[13]);
-    println!("Right eye tragion : {:?} , {:?} ", facial_key[14], facial_key[15]);
-
     println!("\n The output image is saved in the same place as {:?}", &image_name);
-    let ans_image = draw_bboxes_on_image(inp_img,facial_key, prob_value, image_name);
-    
-   Ok(output_buffer)
-}
 
-fn filter_detections(output1: Vec<f32>) -> (Vec<f32>,Vec<u32>) {
-    let sigmoid_score_threshold = f32::ln(0.7/(1.0 - 0.7));
-    // println!("{:?} {:?} ","sigmoid score threshold ", sigmoid_score_threshold);
-    let mut good_detections = vec![];
-    let mut scores = vec![];
-    for (i, value) in output1.iter().enumerate() {
-        if value > &sigmoid_score_threshold {
-            good_detections.push(i as u32);
-            let score_i = 1.0/(1.0 + f32::exp(-(value)));
-            scores.push(score_i);
-        }
-    }
-    // println!("good_detections1.shape :{:?}", good_detections);
-    return (scores, good_detections);
+    let path = Path::new(&out_name);
+    frame_rgb.save(path).unwrap();
+
+   Ok(output_buffer)
 }
 
 fn gen_anchors() -> Vec<Vec<f32>> {
@@ -261,49 +245,34 @@ fn gen_anchors() -> Vec<Vec<f32>> {
     return anchors;
 }
 
-// pass output of information about the detected faces along with indices with probability scores over the threshold
-fn extract_detections(output0: Vec<Vec<f32>>, good_detection_indices : Vec<u32>, score_probs : Vec<f32>) -> (Vec<f32>, Vec<Vec<f32>>, f32) {
+fn conv_anchors(output0 : &mut Vec<Vec<f32>>, image_width : f32, image_height : f32){
 
-    // picking a random box to draw among good_detection_indices
-    // later NMS should be applied here
-    let rng = fastrand::usize(..good_detection_indices.len());
-    let detection_idx = good_detection_indices[rng] as usize;
-    let score_idx = score_probs[rng];
-
+    let anchors = gen_anchors();
     let (input_width, input_height) = (128, 128);
-    let anchors : Vec<Vec<f32>> = gen_anchors();
-    let anchor = &anchors[detection_idx];
-    let sx = output0[detection_idx][0];
-    let sy = output0[detection_idx][1];
-    let mut w = output0[detection_idx][2];
-    let mut h = output0[detection_idx][3];
-    let mut cx = sx + (anchor[0] * input_width as f32);
-    let mut cy = sy + (anchor[1] * input_height as f32);
-    cx /= input_width as f32;
-    cy /= input_height as f32;
-    w /= input_width as f32;
-    h /= input_height as f32;
-    let mut keypoints_idx = vec![];
-    for j in 0..6 {
-        let mut lx = output0[detection_idx][((4 + (2*j)) + 0)];
-        let mut ly = output0[detection_idx][((4 + (2*j)) + 1)];
-        lx += anchor[0] * input_width as f32;
-        ly += anchor[1] * input_height as f32;
-        lx /= input_width as f32;
-        ly /= input_height as f32;
-        let mut keypoints_idx_j = vec![];
-        keypoints_idx_j.push(lx);
-        keypoints_idx_j.push(ly);
-        keypoints_idx.push(keypoints_idx_j);
-    }
-    let mut boxes_idx = vec![];
-    boxes_idx.push(cx - (w*0.5));
-    boxes_idx.push(cy - (h*0.5));
-    boxes_idx.push(cx + (w*0.5));
-    boxes_idx.push(cy + (h*0.5));
-    return (boxes_idx, keypoints_idx, score_idx);
-}
+    let iter = output0.iter_mut().zip(anchors.iter());
+    for (out,anc) in iter{
+        // println!(" \n\n this time \n");
+        let mut out_iter = out.iter();
+        let mut out_ans : Vec<f32> = vec![];
+        let cx = (out_iter.next().unwrap() + (anc[0] * input_width as f32)) / input_width as f32;
+        let cy = (out_iter.next().unwrap() + (anc[1] * input_width as f32)) / input_height as f32;
+        let w = (out_iter.next().unwrap()) / input_width as f32;
+        let h = (out_iter.next().unwrap()) / input_height as f32;
+        out_ans.extend_from_slice(&vec![((cx - (w*0.5)) * image_width ), ((cy - (h*0.5)) * image_height ), ((cx + (w*0.5)) * image_width ), ((cy + (h*0.5)) * image_height )]);
 
+        let keypoints : Vec<f32> = out_iter.enumerate()
+                            .map(|(index, x)| {
+                                if index % 2 == 0 {
+                                    ((x+anc[0]*input_width as f32)/input_width as f32) * image_width
+                                } else {
+                                    ((x+anc[1]*input_height as f32)/input_height as f32) * image_height
+                                }
+                            })
+                            .collect();
+        out_ans.extend_from_slice(&keypoints);
+        *out = out_ans;
+    }
+} 
 
 // Take the image located at 'path', open it, resize it to height x width, and then converts
 // the pixel precision to FP32 by normalizing between -1 to 1.
@@ -332,10 +301,82 @@ fn image_to_tensor(path: String, height: u32, width: u32) -> Vec<u8> {
         u8_f32_arr[(i * 4) + j] = u8_bytes[j];
       }
     }
-
-    // println!("{:?}", u8_f32_arr); 
     return u8_f32_arr;
   }
+
+/// Run non-maximum-suppression on candidate bounding boxes.
+///
+/// The pairs of bounding boxes with confidences have to be sorted in **ascending** order of
+/// confidence because we want to `pop()` the most confident elements from the back.
+///
+/// Start with the most confident bounding box and iterate over all other bounding boxes in the
+/// order of decreasing confidence. Grow the vector of selected bounding boxes by adding only those
+/// candidates which do not have a IoU scores above `max_iou` with already chosen bounding boxes.
+/// This iterates over all bounding boxes in `sorted_bboxes_with_confidences`. Any candidates with
+/// scores generally too low to be considered should be filtered out before.
+fn non_maximum_suppression(
+    mut sorted_bboxes_with_confidences: Vec<(&Vec<f32>, &f32)>,
+    max_iou: f32,
+) -> Vec<(Vec<f32>, f32)> {
+    let mut selected = vec![];
+    'candidates: loop {
+        // Get next most confident bbox from the back of ascending-sorted vector.
+        // All boxes fulfill the minimum confidence criterium.
+        match sorted_bboxes_with_confidences.pop() {
+            Some((bbox, confidence)) => {
+                // Check for overlap with any of the selected bboxes
+                for (selected_bbox, _) in selected.iter() {
+                    match iou(bbox, selected_bbox) {
+                        x if x > max_iou => continue 'candidates,
+                        _ => (),
+                    }
+                }
+
+                // bbox has no large overlap with any of the selected ones, add it
+                selected.push(((*bbox.clone()).to_vec(), *confidence))
+            }
+            None => break 'candidates,
+        }
+    }
+
+    selected
+}
+
+/// Calculate the intersection-over-union metric for two bounding boxes.
+fn iou(bbox_a: &Vec<f32>, bbox_b: &Vec<f32>) -> f32 {
+    // Calculate corner points of overlap box
+    // If the boxes do not overlap, the corner-points will be ill defined, i.e. the top left
+    // corner point will be below and to the right of the bottom right corner point. In this case,
+    // the area will be zero.
+    let overlap_box: Vec<f32> = vec![
+        f32::max(bbox_a[0], bbox_b[0]),
+        f32::max(bbox_a[1], bbox_b[1]),
+        f32::min(bbox_a[2], bbox_b[2]),
+        f32::min(bbox_a[3], bbox_b[3]),
+    ];
+
+    let overlap_area = bbox_area(&overlap_box);
+
+    // Avoid division-by-zero with `EPS`
+    overlap_area / (bbox_area(bbox_a) + bbox_area(bbox_b) - overlap_area + EPS)
+}
+
+/// Calculate the area enclosed by a bounding box.
+///
+/// The bounding box is passed as four-element array defining 8 distinct points:
+/// `[x_top_left, y_top_left, x_bottom_right, y_bottom_right]`
+/// If the bounding box is ill-defined by having the bottom-right point above/to the left of the
+/// top-left point, the area is zero.
+fn bbox_area(bbox: &Vec<f32>) -> f32 {
+    let height = bbox[3] - bbox[1];
+    let width = bbox[2] - bbox[0];
+    if width < 0.0 || height < 0.0 {
+        // bbox is empty/undefined since the bottom-right corner is above the top left corner
+        return 0.0;
+    }
+
+    width * height
+}
 
 lazy_static! {
     static ref DEJAVU_MONO: rusttype::Font<'static> = {
@@ -347,36 +388,28 @@ lazy_static! {
 }
 
 fn draw_bboxes_on_image(
-    mut frame: DynamicImage,
-    facial_key_coords : Vec<u32>, // later give box along with its confidence
+    mut frame_rgb: RgbImage,
+    bbox_coord : Vec<f32>, // later give box along with its confidence
     confidence : f32,
-    image_name: &str,
 ) -> RgbImage{ 
-    // let (image_height, image_width) = (frame.height() as f32, frame.width() as f32);
-    let mut frame_rgb: RgbImage = frame.to_rgb8();
-    let blue  = Rgb([0u8,   0u8,   255u8]);
-
-    let (x1, y1) = (facial_key_coords[0], facial_key_coords[1]);
-    let (x2, y2) = (facial_key_coords[2], facial_key_coords[3]);
-    let rect_width = x2 - x1;
-    let rect_height = y2 - y1;
+    let (blue , _red)  = (Rgb([0u8,   0u8,   255u8]), Rgb([255u8,   0u8,   0u8]));
 
     let face_rect =
-                Rect::at(x1 as i32, y1 as i32).of_size(rect_width as u32, rect_height as u32);
+                Rect::at(bbox_coord[0] as i32, bbox_coord[1] as i32).of_size((bbox_coord[2] - bbox_coord[0]) as u32, (bbox_coord[3] - bbox_coord[1])  as u32);
     draw_hollow_rect_mut(&mut frame_rgb, face_rect, blue);
     frame_rgb = draw_text(
                     &frame_rgb,
                     blue,
-                    x1 as i32,
-                    y1 as i32,
+                    bbox_coord[0] as i32,
+                    bbox_coord[1] as i32,
                     rusttype::Scale { x: 16.0, y: 16.0 },
                     &DEJAVU_MONO,
                     &format!("{:.2}%", confidence * 100.0),
                 );
+    for i in 0.. 6{
+        draw_cross_mut(&mut frame_rgb, blue, bbox_coord[4+(2*i)] as i32, bbox_coord[5+(2*i)] as i32);
+    }
     // draw_hollow_rect_mut(&mut image_dr, Rect::at(60, 10).of_size(20, 20), blue);
-    let out_name = format!("{}{}",image_name,"_drawn_out.jpg");
-    let path = Path::new(&out_name);
-    frame_rgb.save(path).unwrap();
     return frame_rgb;
 }
 
